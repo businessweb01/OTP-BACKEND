@@ -40,28 +40,32 @@ router.post('/', async (req, res) => {
 });
 
 // Verify OTP
-router.post('/verify-otp', (req, res) => {
-  const { to_email, otp } = req.body;
+router.post('/verify-otp', async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP required' });
 
-  if (!to_email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP required' });
+  try {
+    const ref = doc(db, 'otp', email);
+    const docSnap = await getDoc(ref);
 
-  const record = otpStore.get(to_email);
+    if (!docSnap.exists()) return res.status(400).json({ success: false, message: 'No OTP found' });
 
-  if (!record) {
-    return res.status(400).json({ success: false, message: 'No OTP found or already verified' });
+    const { otp: storedOtp, expiresAt } = docSnap.data();
+
+    if (Date.now() > expiresAt) {
+      await deleteDoc(ref);
+      return res.status(400).json({ success: false, message: 'OTP expired' });
+    }
+
+    if (otp !== storedOtp) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    await deleteDoc(ref); // ✅ Invalidate immediately
+    res.json({ success: true, message: 'OTP verified' });
+  } catch (err) {
+    console.error('Verify OTP error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
-
-  const { code, expiresAt } = record;
-
-  if (Date.now() > expiresAt) {
-    otpStore.delete(to_email); // Clean up expired OTP
-    return res.status(400).json({ success: false, message: 'OTP expired' });
-  }
-
-  if (otp !== code) {
-    return res.status(400).json({ success: false, message: 'Invalid OTP' });
-  }
-
-  otpStore.delete(to_email); // ✅ DELETE OTP on success
-  return res.status(200).json({ success: true, message: 'OTP verified' });
 });
+
