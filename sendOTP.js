@@ -3,13 +3,13 @@ import emailjs from '@emailjs/nodejs';
 
 const router = express.Router();
 
-const otpStore = new Map(); // simple in-memory store { email: otp }
+const otpStore = new Map(); // { email: { code, expiresAt } }
 
 function generateOtp() {
-  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit
 }
 
-// Send OTP endpoint
+// Send OTP
 router.post('/', async (req, res) => {
   const { to_email } = req.body;
 
@@ -17,7 +17,10 @@ router.post('/', async (req, res) => {
 
   try {
     const otp = generateOtp();
-    otpStore.set(to_email, otp);
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes from now
+
+    // Overwrite old OTP with new one
+    otpStore.set(to_email, { code: otp, expiresAt });
 
     await emailjs.send(
       process.env.EMAILJS_SERVICE_ID,
@@ -36,20 +39,29 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Verify OTP endpoint
+// Verify OTP
 router.post('/verify-otp', (req, res) => {
   const { to_email, otp } = req.body;
 
   if (!to_email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP required' });
 
-  const validOtp = otpStore.get(to_email);
+  const record = otpStore.get(to_email);
 
-  if (validOtp === otp) {
-    otpStore.delete(to_email); // invalidate OTP after verification
-    return res.status(200).json({ success: true, message: 'OTP verified' });
+  if (!record) {
+    return res.status(400).json({ success: false, message: 'No OTP found or already verified' });
   }
 
-  res.status(400).json({ success: false, message: 'Invalid OTP' });
-});
+  const { code, expiresAt } = record;
 
-export default router;
+  if (Date.now() > expiresAt) {
+    otpStore.delete(to_email); // Clean up expired OTP
+    return res.status(400).json({ success: false, message: 'OTP expired' });
+  }
+
+  if (otp !== code) {
+    return res.status(400).json({ success: false, message: 'Invalid OTP' });
+  }
+
+  otpStore.delete(to_email); // ✅ DELETE OTP on success
+  return res.status(200).json({ success: true, message: 'OTP verified' });
+});
